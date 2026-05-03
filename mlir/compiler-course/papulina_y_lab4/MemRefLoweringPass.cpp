@@ -9,19 +9,23 @@
 using namespace mlir;
 
 namespace {
-class MemRefLoweringPass : public PassWrapper<MemRefLoweringPass, OperationPass<ModuleOp>> {
+class MemRefLoweringPass
+    : public PassWrapper<MemRefLoweringPass, OperationPass<ModuleOp>> {
 public:
   StringRef getArgument() const final { return "replace-memref-copy"; }
-  StringRef getDescription() const final { return "lowers memref.copy to scf.for loops"; }
+  StringRef getDescription() const final {
+    return "lowers memref.copy to scf.for loops";
+  }
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
+    registry
+        .insert<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
   }
   void runOnOperation() override {
     ModuleOp module = getOperation();
     IRRewriter rewriter(&getContext());
     module.walk([&](memref::CopyOp copyOp) {
       if (failed(lowerCopy(copyOp, rewriter))) {
-        return WalkResult::interrupt(); 
+        return WalkResult::interrupt();
       }
       return WalkResult::advance();
     });
@@ -49,10 +53,10 @@ public:
 
     scf::buildLoopNest(rewriter, loc, lbs, ubs, steps,
                        [&](OpBuilder &b, Location loc, ValueRange ivs) {
-                         Value element = b.create<memref::LoadOp>(loc, src, ivs);
+                         Value element =
+                             b.create<memref::LoadOp>(loc, src, ivs);
                          b.create<memref::StoreOp>(loc, element, dst, ivs);
                        });
-
     rewriter.eraseOp(copyOp);
     return success();
   }
