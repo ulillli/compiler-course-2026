@@ -10,13 +10,17 @@ using namespace mlir;
 
 namespace {
 
-struct CopyExpansionPass : public PassWrapper<CopyExpansionPass, OperationPass<ModuleOp>> {
-  
+struct CopyExpansionPass
+    : public PassWrapper<CopyExpansionPass, OperationPass<ModuleOp>> {
+
   StringRef getArgument() const final { return "replace-memref-copy"; }
-  StringRef getDescription() const final { return "Expand memref.copy into explicit scf.for loops"; }
+  StringRef getDescription() const final {
+    return "Expand memref.copy into explicit scf.for loops";
+  }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
+    registry
+        .insert<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
   }
   void runOnOperation() override {
     auto module = getOperation();
@@ -41,7 +45,7 @@ struct CopyExpansionPass : public PassWrapper<CopyExpansionPass, OperationPass<M
 
     auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
     auto step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    
+
     SmallVector<Value> lowerBounds(rank, zero);
     SmallVector<Value> steps(rank, step);
     SmallVector<Value> upperBounds;
@@ -49,11 +53,13 @@ struct CopyExpansionPass : public PassWrapper<CopyExpansionPass, OperationPass<M
     for (auto dim : shape) {
       upperBounds.push_back(rewriter.create<arith::ConstantIndexOp>(loc, dim));
     }
-    scf::buildLoopNest(rewriter, loc, lowerBounds, upperBounds, steps,
-                       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
-                         auto pixel = nestedBuilder.create<memref::LoadOp>(nestedLoc, source, ivs);
-                         nestedBuilder.create<memref::StoreOp>(nestedLoc, pixel, target, ivs);
-                       });
+    scf::buildLoopNest(
+        rewriter, loc, lowerBounds, upperBounds, steps,
+        [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
+          auto pixel =
+              nestedBuilder.create<memref::LoadOp>(nestedLoc, source, ivs);
+          nestedBuilder.create<memref::StoreOp>(nestedLoc, pixel, target, ivs);
+        });
 
     rewriter.eraseOp(op);
     return success();
@@ -70,6 +76,7 @@ mlir::PassPluginLibraryInfo getCopyExpansionPluginInfo() {
           []() { mlir::PassRegistration<CopyExpansionPass>(); }};
 }
 
-extern "C" LLVM_ATTRIBUTE_WEAK mlir::PassPluginLibraryInfo mlirGetPassPluginInfo() {
+extern "C" LLVM_ATTRIBUTE_WEAK mlir::PassPluginLibraryInfo
+mlirGetPassPluginInfo() {
   return getCopyExpansionPluginInfo();
 }
