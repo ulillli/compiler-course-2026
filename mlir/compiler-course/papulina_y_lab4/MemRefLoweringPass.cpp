@@ -9,69 +9,67 @@
 using namespace mlir;
 
 namespace {
-class MemRefLoweringPass
-    : public PassWrapper<MemRefLoweringPass, OperationPass<ModuleOp>> {
-public:
+
+struct CopyExpansionPass : public PassWrapper<CopyExpansionPass, OperationPass<ModuleOp>> {
+  
   StringRef getArgument() const final { return "replace-memref-copy"; }
-  StringRef getDescription() const final {
-    return "lowers memref.copy to scf.for loops";
-  }
+  StringRef getDescription() const final { return "Expand memref.copy into explicit scf.for loops"; }
+
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry
-        .insert<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
+    registry.insert<scf::SCFDialect, arith::ArithDialect, memref::MemRefDialect>();
   }
   void runOnOperation() override {
-    ModuleOp module = getOperation();
-    IRRewriter rewriter(&getContext());
-    module.walk([&](memref::CopyOp copyOp) {
-      if (failed(lowerCopy(copyOp, rewriter))) {
-        return WalkResult::interrupt();
+    auto module = getOperation();
+    IRRewriter rewriter(module.getContext());
+    module.walk([&](memref::CopyOp op) {
+      if (succeeded(expandCopyOp(op, rewriter))) {
+        return WalkResult::advance();
       }
-      return WalkResult::advance();
+      return WalkResult::interrupt();
     });
   }
-  LogicalResult lowerCopy(memref::CopyOp copyOp, IRRewriter &rewriter) {
-    Location loc = copyOp.getLoc();
-    Value src = copyOp.getSource();
-    Value dst = copyOp.getTarget();
 
-    auto memrefType = cast<MemRefType>(src.getType());
-    auto shape = memrefType.getShape();
-    unsigned rank = memrefType.getRank();
+  LogicalResult expandCopyOp(memref::CopyOp op, IRRewriter &rewriter) {
+    auto source = op.getSource();
+    auto target = op.getTarget();
+    auto loc = op.getLoc();
+    auto type = llvm::cast<MemRefType>(source.getType());
+    auto shape = type.getShape();
+    int64_t rank = type.getRank();
 
-    rewriter.setInsertionPoint(copyOp);
+    rewriter.setInsertionPoint(op);
 
-    SmallVector<Value, 4> lbs, ubs, steps;
-    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-
-    for (int64_t dimSize : shape) {
-      lbs.push_back(zero);
-      steps.push_back(one);
-      ubs.push_back(rewriter.create<arith::ConstantIndexOp>(loc, dimSize));
+    auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    auto step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    
+    SmallVector<Value> lowerBounds(rank, zero);
+    SmallVector<Value> steps(rank, step);
+    SmallVector<Value> upperBounds;
+    upperBounds.reserve(rank);
+    for (auto dim : shape) {
+      upperBounds.push_back(rewriter.create<arith::ConstantIndexOp>(loc, dim));
     }
-
-    scf::buildLoopNest(rewriter, loc, lbs, ubs, steps,
-                       [&](OpBuilder &b, Location loc, ValueRange ivs) {
-                         Value element =
-                             b.create<memref::LoadOp>(loc, src, ivs);
-                         b.create<memref::StoreOp>(loc, element, dst, ivs);
+    scf::buildLoopNest(rewriter, loc, lowerBounds, upperBounds, steps,
+                       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
+                         auto pixel = nestedBuilder.create<memref::LoadOp>(nestedLoc, source, ivs);
+                         nestedBuilder.create<memref::StoreOp>(nestedLoc, pixel, target, ivs);
                        });
-    rewriter.eraseOp(copyOp);
+
+    rewriter.eraseOp(op);
     return success();
   }
 };
+
 } // namespace
 
-MLIR_DECLARE_EXPLICIT_TYPE_ID(MemRefLoweringPass)
-MLIR_DEFINE_EXPLICIT_TYPE_ID(MemRefLoweringPass)
+MLIR_DECLARE_EXPLICIT_TYPE_ID(CopyExpansionPass)
+MLIR_DEFINE_EXPLICIT_TYPE_ID(CopyExpansionPass)
 
-mlir::PassPluginLibraryInfo getFunctionCallCounterPassPluginInfo() {
-  return {MLIR_PLUGIN_API_VERSION, "MemRefLoweringPass", "1.0",
-          []() { mlir::PassRegistration<MemRefLoweringPass>(); }};
+mlir::PassPluginLibraryInfo getCopyExpansionPluginInfo() {
+  return {MLIR_PLUGIN_API_VERSION, "CopyExpansionPass", "0.1",
+          []() { mlir::PassRegistration<CopyExpansionPass>(); }};
 }
 
-extern "C" LLVM_ATTRIBUTE_WEAK mlir::PassPluginLibraryInfo
-mlirGetPassPluginInfo() {
-  return getFunctionCallCounterPassPluginInfo();
+extern "C" LLVM_ATTRIBUTE_WEAK mlir::PassPluginLibraryInfo mlirGetPassPluginInfo() {
+  return getCopyExpansionPluginInfo();
 }
